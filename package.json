@@ -1,0 +1,12 @@
+{
+  "name": "fragzone-bot",
+  "version": "1.0.0",
+  "main": "core.js",
+  "scripts": {
+    "start": "node core.js",
+    "deploy": "node deploy.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.13.0"
+  }
+}
