@@ -1,4 +1,19 @@
-const { Client, GatewayIntentBits, Collection, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, PermissionsBitField, ModalBuilder, TextInputBuilder, TextInputStyle, InteractionType } = require('discord.js');
+const { 
+    Client, 
+    GatewayIntentBits, 
+    Collection, 
+    EmbedBuilder, 
+    ActionRowBuilder, 
+    ButtonBuilder, 
+    ButtonStyle, 
+    ChannelType, 
+    PermissionsBitField, 
+    ModalBuilder, 
+    TextInputBuilder, 
+    TextInputStyle, 
+    InteractionType 
+} = require('discord.js');
+
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -29,147 +44,178 @@ if (fs.existsSync(commandsPath)) {
     }
 }
 
-// Funkcja do pobierania konfiguracji
+// Funkcja pobierająca konfigurację rang
 function getConfig() {
     const configPath = path.join(__dirname, 'config.json');
-    if (!fs.existsSync(configPath)) return {};
+    if (!fs.existsSync(configPath)) return { staffRoles: [] };
     try {
-        return JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    } catch (e) {
-        return {};
+        const data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        return data.staffRoles ? data : { staffRoles: [] };
+    } catch (e) { 
+        return { staffRoles: [] }; 
     }
 }
 
 client.once('ready', () => {
-    console.log(`✅ FragZone Pro Tickets Online!`);
+    console.log(`✅ FragZone Pro Online!`);
 });
 
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
     const command = client.commands.get(interaction.commandName);
-    if (!command) return;
-    try { 
-        await command.execute(interaction); 
-    } catch (e) { 
-        console.error(e); 
-    }
+    if (command) try { await command.execute(interaction); } catch (e) { console.error(e); }
 });
 
-// --- SYSTEM TICKETÓW ---
+// --- GŁÓWNA OBSŁUGA SYSTEMU ---
 client.on('interactionCreate', async interaction => {
     if (!interaction.isButton() && interaction.type !== InteractionType.ModalSubmit) return;
 
     const config = getConfig();
-    const staffRole = config.staffRoleId;
+    const staffRoles = config.staffRoles;
+    
+    // Sprawdzanie czy użytkownik to Staff lub Admin
+    const isStaff = interaction.member.roles.cache.some(role => staffRoles.includes(role.id)) || 
+                    interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
 
-    const CATEGORIES = {
-        minecraft: { label: 'Minecraft', emoji: '⛏️', prefix: 'mc' },
-        discord: { label: 'Discord', emoji: '💬', prefix: 'dc' },
-        rekrutacja: { label: 'Rekrutacja', emoji: '📝', prefix: 'podanie' },
-        inne: { label: 'Inne', emoji: '⚙️', prefix: 'inne' }
-    };
-
-    // 1. OTWIERANIE TICKETU
+    // 1. KLIKNIĘCIE PRZYCISKU WYBORU KATEGORII
     if (interaction.isButton() && interaction.customId.startsWith('t_')) {
-        const existingChannel = interaction.guild.channels.cache.find(c => 
+        const key = interaction.customId.replace('t_', '');
+        
+        const existing = interaction.guild.channels.cache.find(c => 
             c.parentId === CATEGORY_ID && 
             c.name.includes(interaction.user.username.toLowerCase())
         );
 
-        if (existingChannel) {
-            return interaction.reply({ content: `❌ Masz już otwarte zgłoszenie: ${existingChannel}`, ephemeral: true });
+        if (existing) {
+            return interaction.reply({ content: `❌ Masz już otwarty ticket: ${existing}`, ephemeral: true });
         }
 
-        const key = interaction.customId.replace('t_', '');
+        // Tworzenie Modala (Formularza)
+        const modal = new ModalBuilder()
+            .setCustomId(`modal_open_${key}`)
+            .setTitle('Formularz zgłoszeniowy');
+
+        const input = new TextInputBuilder()
+            .setCustomId('user_input')
+            .setRequired(true);
+
+        if (key === 'rekrutacja') {
+            input.setLabel("Na jaką rangę kandydujesz?")
+                 .setPlaceholder("np. Helper, Moderator, Budowniczy...")
+                 .setStyle(TextInputStyle.Short);
+        } else {
+            input.setLabel("Opisz swój problem:")
+                 .setPlaceholder("Napisz tutaj, w czym możemy Ci pomóc...")
+                 .setStyle(TextInputStyle.Paragraph);
+        }
+
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return await interaction.showModal(modal);
+    }
+
+    // 2. WYSŁANIE FORMULARZA I TWORZENIE KANAŁU
+    if (interaction.type === InteractionType.ModalSubmit && interaction.customId.startsWith('modal_open_')) {
+        const key = interaction.customId.replace('modal_open_', '');
+        const userInput = interaction.fields.getTextInputValue('user_input');
+        
+        const CATEGORIES = {
+            minecraft: { label: 'Minecraft', emoji: '⛏️', prefix: 'mc' },
+            discord: { label: 'Discord', emoji: '💬', prefix: 'dc' },
+            rekrutacja: { label: 'Rekrutacja', emoji: '📝', prefix: 'podanie' },
+            inne: { label: 'Inne', emoji: '⚙️', prefix: 'inne' }
+        };
         const cat = CATEGORIES[key];
+
+        const overwrites = [
+            { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+            { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AttachFiles] }
+        ];
+
+        staffRoles.forEach(id => {
+            overwrites.push({ id: id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AttachFiles] });
+        });
 
         const channel = await interaction.guild.channels.create({
             name: `${cat.prefix}-${interaction.user.username}`,
             type: ChannelType.GuildText,
             parent: CATEGORY_ID,
-            permissionOverwrites: [
-                { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-                { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AttachFiles] },
-                ...(staffRole ? [{ id: staffRole, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AttachFiles] }] : [])
-            ],
+            permissionOverwrites: overwrites,
         });
 
+        const infoLabel = key === 'rekrutacja' ? `**Wybrana ranga:**` : `**Opis problemu:**`;
+
         const welcomeEmbed = new EmbedBuilder()
-            .setTitle('🛡️ FragZone Support')
-            .setDescription(`Witaj ${interaction.user}!\nOpisz swój problem.\n\n**Kategoria:** ${cat.emoji} ${cat.label}\n**Status:** ⏳ Oczekiwanie na administrację...`)
+            .setTitle(`🛡️ FragZone Support - ${cat.label}`)
+            .setDescription(`Witaj ${interaction.user}!\n\n${infoLabel}\n${userInput}\n\n**Status:** ⏳ Oczekiwanie na administrację...`)
             .setColor('#2ecc71')
-            .setFooter({ text: 'Tylko administracja może zarządzać tym ticketem' });
+            .setTimestamp();
 
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('claim').setLabel('Przejmij').setEmoji('📜').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('close_req').setLabel('Zamknij').setEmoji('🔒').setStyle(ButtonStyle.Danger)
         );
 
-        await channel.send({ content: `${interaction.user} | <@&${staffRole || ''}>`, embeds: [welcomeEmbed], components: [row] });
-        await interaction.reply({ content: `✅ Otwarto ticket: ${channel}`, ephemeral: true });
+        await channel.send({ content: `@everyone`, embeds: [welcomeEmbed], components: [row] });
+        await interaction.reply({ content: `✅ Twój ticket został otwarty: ${channel}`, ephemeral: true });
     }
 
-    // 2. OBSŁUGA PRZEJMOWANIA
+    // 3. OBSŁUGA PRZEJMOWANIA (CLAIM)
     if (interaction.isButton() && interaction.customId === 'claim') {
-        if (staffRole && !interaction.member.roles.cache.has(staffRole)) {
-            return interaction.reply({ content: "❌ Tylko administracja może przejmować zgłoszenia!", ephemeral: true });
-        }
+        if (!isStaff) return interaction.reply({ content: "❌ Tylko staff może to zrobić!", ephemeral: true });
 
         const messages = await interaction.channel.messages.fetch({ limit: 10 });
         const welcomeMsg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0);
         
         if (welcomeMsg) {
-            const oldEmbed = welcomeMsg.embeds[0];
-            const newEmbed = EmbedBuilder.from(oldEmbed)
-                .setDescription(oldEmbed.description.replace('⏳ Oczekiwanie na administrację...', `✅ Przyjęte przez: **${interaction.user.username}**`))
+            const updatedEmbed = EmbedBuilder.from(welcomeMsg.embeds[0])
+                .setDescription(welcomeMsg.embeds[0].description.replace('⏳ Oczekiwanie na administrację...', `✅ Przyjęte przez: **${interaction.user.username}**`))
                 .setColor('#3498db');
-            await welcomeMsg.edit({ embeds: [newEmbed] });
+            await welcomeMsg.edit({ embeds: [updatedEmbed] });
         }
 
-        const claimEmbed = new EmbedBuilder()
-            .setTitle('🛡️ System FragZone')
-            .setDescription(`Zgłoszenie jest teraz obsługiwane przez: **${interaction.user.username}**`)
-            .setColor('#3498db');
-
-        const disabledRow = new ActionRowBuilder().addComponents(
+        const buttons = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('claimed').setLabel('Przejęte').setStyle(ButtonStyle.Secondary).setDisabled(true),
             new ButtonBuilder().setCustomId('close_req').setLabel('Zamknij').setEmoji('🔒').setStyle(ButtonStyle.Danger)
         );
 
-        await interaction.update({ components: [disabledRow] });
-        await interaction.channel.send({ embeds: [claimEmbed] });
+        await interaction.update({ components: [buttons] });
+        await interaction.channel.send({ 
+            embeds: [new EmbedBuilder().setTitle('🛡️ System FragZone').setDescription(`Zgłoszenie obsługuje: **${interaction.user.username}**`).setColor('#3498db')] 
+        });
     }
 
-    // 3. ZAMYKANIE
+    // 4. MODAL ZAMYKANIA
     if (interaction.isButton() && interaction.customId === 'close_req') {
-        if (staffRole && !interaction.member.roles.cache.has(staffRole)) {
-            return interaction.reply({ content: "❌ Gracze nie mogą sami zamykać ticketów.", ephemeral: true });
-        }
+        if (!isStaff) return interaction.reply({ content: "❌ Nie masz uprawnień do zamykania.", ephemeral: true });
 
         const modal = new ModalBuilder().setCustomId('modal_close').setTitle('Zamykanie Ticketu');
-        const input = new TextInputBuilder().setCustomId('reason').setLabel("Powód zamknięcia:").setStyle(TextInputStyle.Paragraph).setRequired(true);
+        const input = new TextInputBuilder()
+            .setCustomId('reason')
+            .setLabel("Powód zamknięcia:")
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true);
+
         modal.addComponents(new ActionRowBuilder().addComponents(input));
         await interaction.showModal(modal);
     }
 
-    // 4. FINALNE USUNIĘCIE
+    // 5. USUNIĘCIE KANAŁU
     if (interaction.type === InteractionType.ModalSubmit && interaction.customId === 'modal_close') {
         const reason = interaction.fields.getTextInputValue('reason');
         const ownerName = interaction.channel.name.split('-')[1];
-        const owner = interaction.guild.members.cache.find(m => m.user.username === ownerName);
+        const owner = interaction.guild.members.cache.find(m => m.user.username.toLowerCase() === ownerName.toLowerCase());
 
-        const dmEmbed = new EmbedBuilder()
+        const dm = new EmbedBuilder()
             .setTitle('🎫 Ticket Zamknięty - FragZone')
             .addFields(
-                { name: '👤 Zamknięty przez', value: `${interaction.user.tag}`, inline: true },
+                { name: '👤 Przez', value: `${interaction.user.tag}` }, 
                 { name: '💬 Powód', value: `\`\`\`${reason}\`\`\`` }
             )
-            .setColor('#e74c3c')
-            .setTimestamp();
+            .setColor('#e74c3c');
 
-        if (owner) await owner.send({ embeds: [dmEmbed] }).catch(() => {});
+        if (owner) await owner.send({ embeds: [dm] }).catch(() => {});
         
-        await interaction.reply("✅ Zamykanie kanału za 5 sekund...");
+        await interaction.reply("✅ Zamykanie za 5 sekund...");
         setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
     }
 });
