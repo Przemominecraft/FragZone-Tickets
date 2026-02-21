@@ -17,11 +17,12 @@ const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 	try {
 		console.log('Odświeżanie komend Slash...');
 		await rest.put(
-			Routes.applicationCommands('ID_TWOJEGO_BOTA'), // Wpisz tu ID bota!
+			Routes.applicationCommands('1474749541084561458'), // Wpisz tu ID bota!
 			{ body: commands },
 		);
 		console.log('✅ Komendy zarejestrowane!');
 	} catch (error) {
 		console.error(error);
 	}
+
 })();
