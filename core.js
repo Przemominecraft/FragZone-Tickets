@@ -2,37 +2,53 @@ const { Client, GatewayIntentBits, Collection, EmbedBuilder, ActionRowBuilder, B
 const fs = require('node:fs');
 const path = require('node:path');
 
+// Zmienne środowiskowe (ustaw je na Railway)
 const TOKEN = process.env.DISCORD_TOKEN;
 const CATEGORY_ID = '1474735192064131082';
 
 const client = new Client({ 
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers] 
+    intents: [
+        GatewayIntentBits.Guilds, 
+        GatewayIntentBits.GuildMessages, 
+        GatewayIntentBits.MessageContent, 
+        GatewayIntentBits.GuildMembers
+    ] 
 });
 
-// Handler komend
+// --- COMMAND HANDLER ---
 client.commands = new Collection();
 const commandsPath = path.join(__dirname, 'commands');
-const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
 
-for (const file of commandFiles) {
-    const filePath = path.join(commandsPath, file);
-    const command = require(filePath);
-    if ('data' in command && 'execute' in command) {
-        client.commands.set(command.data.name, command);
+if (fs.existsSync(commandsPath)) {
+    const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+    for (const file of commandFiles) {
+        const filePath = path.join(commandsPath, file);
+        const command = require(filePath);
+        if ('data' in command && 'execute' in command) {
+            client.commands.set(command.data.name, command);
+        }
     }
 }
 
-client.once('ready', () => console.log(`✅ FragZone Core online!`));
+client.once('ready', () => {
+    console.log(`✅ FragZone Core Online! Zalogowano jako ${client.user.tag}`);
+});
 
 // Obsługa komend Slash (/setup)
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
     const command = client.commands.get(interaction.commandName);
     if (!command) return;
-    try { await command.execute(interaction); } catch (error) { console.error(error); }
+
+    try {
+        await command.execute(interaction);
+    } catch (error) {
+        console.error(error);
+        await interaction.reply({ content: 'Wystąpił błąd podczas wykonywania komendy!', ephemeral: true });
+    }
 });
 
-// Obsługa logiki ticketów (przyciski i modale)
+// --- LOGIKA TICKETÓW (PRZYCISKI I MODALE) ---
 client.on('interactionCreate', async interaction => {
     const CATEGORIES = {
         minecraft: { label: 'Minecraft', emoji: '⛏️', style: ButtonStyle.Success, prefix: 'mc' },
@@ -41,7 +57,7 @@ client.on('interactionCreate', async interaction => {
         inne: { label: 'Inne', emoji: '⚙️', style: ButtonStyle.Danger, prefix: 'inne' }
     };
 
-    // Otwieranie ticketu
+    // 1. Kliknięcie przycisku w menu głównym (Otwieranie Ticketu)
     if (interaction.isButton() && interaction.customId.startsWith('t_')) {
         const key = interaction.customId.replace('t_', '');
         const config = CATEGORIES[key];
@@ -52,51 +68,72 @@ client.on('interactionCreate', async interaction => {
             parent: CATEGORY_ID,
             permissionOverwrites: [
                 { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-                { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+                { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AttachFiles] },
             ],
         });
 
         const welcomeEmbed = new EmbedBuilder()
-            .setTitle('Ticket Opened')
-            .setDescription(`${interaction.user} stworzył ticket w kategorii **${config.label}**.`)
+            .setTitle('🛡️ Ticket Opened')
+            .setDescription(`Witaj ${interaction.user}! Opisz swój problem, a administracja zaraz Ci pomoże.\n\n**Kategoria:** ${config.emoji} ${config.label}`)
             .setColor('#2ecc71')
-            .setFooter({ text: 'Użyj przycisku poniżej, aby zamknąć.' });
+            .setFooter({ text: 'FragZone Tickets' });
 
         const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('close_req').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger)
+            new ButtonBuilder().setCustomId('close_req').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('claim').setLabel('Claim Ticket').setEmoji('📜').setStyle(ButtonStyle.Secondary)
         );
 
         await channel.send({ content: `${interaction.user}`, embeds: [welcomeEmbed], components: [row] });
         await interaction.reply({ content: `Otwarto ticket: ${channel}`, ephemeral: true });
     }
 
-    // Wyświetlanie okienka (Modal) po kliknięciu Close
+    // 2. Kliknięcie Close -> Otwarcie Modala na powód
     if (interaction.isButton() && interaction.customId === 'close_req') {
         const modal = new ModalBuilder().setCustomId('modal_close').setTitle('Zamykanie zgłoszenia');
-        const input = new TextInputBuilder().setCustomId('reason').setLabel("Powód zamknięcia:").setStyle(TextInputStyle.Paragraph).setRequired(true);
+        const input = new TextInputBuilder()
+            .setCustomId('reason')
+            .setLabel("Powód zamknięcia:")
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true)
+            .setPlaceholder('Np. Pomoc udzielona, sprawa rozwiązana.');
+
         modal.addComponents(new ActionRowBuilder().addComponents(input));
         await interaction.showModal(modal);
     }
 
-    // Obsługa formularza (DM do gracza i usuwanie)
+    // 3. Wysłanie Modala -> DM do gracza i usunięcie kanału
     if (interaction.type === InteractionType.ModalSubmit && interaction.customId === 'modal_close') {
         const reason = interaction.fields.getTextInputValue('reason');
+        
+        // Szukanie właściciela (zakładamy, że nick jest w nazwie kanału po myślniku)
         const ownerName = interaction.channel.name.split('-')[1];
         const owner = interaction.guild.members.cache.find(m => m.user.username === ownerName);
 
         const dmEmbed = new EmbedBuilder()
-            .setTitle('Ticket Zamknięty')
+            .setTitle('🎫 Twój Ticket został zamknięty')
             .addFields(
-                { name: '📄 Nazwa', value: interaction.channel.name, inline: true },
-                { name: '👤 Przez', value: interaction.user.tag, inline: true },
-                { name: '💬 Powód', value: reason }
+                { name: '🌐 Serwer', value: `FragZone`, inline: true },
+                { name: '👤 Zamknięty przez', value: `${interaction.user.tag}`, inline: true },
+                { name: '📄 Nazwa kanału', value: `\`${interaction.channel.name}\`` },
+                { name: '💬 Powód', value: `\`\`\`${reason}\`\`\`` }
             )
-            .setColor('#ff0000').setTimestamp();
+            .setColor('#ff4747')
+            .setTimestamp();
 
-        if (owner) await owner.send({ embeds: [dmEmbed] }).catch(() => {});
+        if (owner) {
+            await owner.send({ embeds: [dmEmbed] }).catch(() => console.log("Nie można wysłać DM."));
+        }
 
-        await interaction.reply('✅ Powód wysłany. Usuwanie za 5 sekund...');
-        setTimeout(() => interaction.channel.delete(), 5000);
+        await interaction.reply({ content: '✅ Powód został zapisany. Kanał zostanie usunięty za 5 sekund.' });
+        
+        setTimeout(() => {
+            interaction.channel.delete().catch(() => {});
+        }, 5000);
+    }
+
+    // 4. Obsługa Claim
+    if (interaction.isButton() && interaction.customId === 'claim') {
+        await interaction.reply({ content: `Ten ticket jest teraz obsługiwany przez **${interaction.user.username}**!` });
     }
 });
 
