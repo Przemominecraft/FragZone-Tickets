@@ -19,6 +19,7 @@ const path = require('node:path');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CATEGORY_ID = '1474735192064131082';
+const GUILD_ID = '1465447308111118520'; // ID Twojego serwera
 
 const client = new Client({ 
     intents: [
@@ -44,7 +45,7 @@ if (fs.existsSync(commandsPath)) {
     }
 }
 
-// Funkcja pobierająca konfigurację rang
+// Funkcja pobierająca konfigurację rang Staffu
 function getConfig() {
     const configPath = path.join(__dirname, 'config.json');
     if (!fs.existsSync(configPath)) return { staffRoles: [] };
@@ -56,8 +57,21 @@ function getConfig() {
     }
 }
 
-client.once('ready', () => {
+// --- START BOTA + TAG SERWEROWY ---
+client.once('ready', async () => {
     console.log(`✅ FragZone Pro Online!`);
+
+    const SERWER_TAG = 'FRAG';
+    try {
+        const guild = client.guilds.cache.get(GUILD_ID);
+        if (guild) {
+            const botMember = await guild.members.fetch(client.user.id);
+            await botMember.setNickname(`${SERWER_TAG} ${client.user.username}`);
+            console.log(`🏷️ Tag serwerowy [${SERWER_TAG}] został ustawiony!`);
+        }
+    } catch (error) {
+        console.log("⚠️ Nie udało się ustawić tagu (brak uprawnień?):", error.message);
+    }
 });
 
 client.on('interactionCreate', async interaction => {
@@ -66,18 +80,18 @@ client.on('interactionCreate', async interaction => {
     if (command) try { await command.execute(interaction); } catch (e) { console.error(e); }
 });
 
-// --- GŁÓWNA OBSŁUGA SYSTEMU ---
+// --- GŁÓWNA OBSŁUGA SYSTEMU TICKETÓW ---
 client.on('interactionCreate', async interaction => {
     if (!interaction.isButton() && interaction.type !== InteractionType.ModalSubmit) return;
 
     const config = getConfig();
     const staffRoles = config.staffRoles;
     
-    // Sprawdzanie czy użytkownik to Staff lub Admin
+    // Sprawdzanie czy użytkownik to Staff lub Admin (pozwala na zamykanie własnych ticketów przez admina)
     const isStaff = interaction.member.roles.cache.some(role => staffRoles.includes(role.id)) || 
                     interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
 
-    // 1. KLIKNIĘCIE PRZYCISKU WYBORU KATEGORII
+    // 1. KLIKNIĘCIE PRZYCISKU WYBORU KATEGORII -> POKAZUJE MODAL
     if (interaction.isButton() && interaction.customId.startsWith('t_')) {
         const key = interaction.customId.replace('t_', '');
         
@@ -90,7 +104,6 @@ client.on('interactionCreate', async interaction => {
             return interaction.reply({ content: `❌ Masz już otwarty ticket: ${existing}`, ephemeral: true });
         }
 
-        // Tworzenie Modala (Formularza)
         const modal = new ModalBuilder()
             .setCustomId(`modal_open_${key}`)
             .setTitle('Formularz zgłoszeniowy');
@@ -113,7 +126,7 @@ client.on('interactionCreate', async interaction => {
         return await interaction.showModal(modal);
     }
 
-    // 2. WYSŁANIE FORMULARZA I TWORZENIE KANAŁU
+    // 2. WYSŁANIE FORMULARZA -> TWORZENIE KANAŁU
     if (interaction.type === InteractionType.ModalSubmit && interaction.customId.startsWith('modal_open_')) {
         const key = interaction.customId.replace('modal_open_', '');
         const userInput = interaction.fields.getTextInputValue('user_input');
@@ -131,6 +144,7 @@ client.on('interactionCreate', async interaction => {
             { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AttachFiles] }
         ];
 
+        // Dodawanie uprawnień dla wszystkich rang ustawionych przez /staff-set
         staffRoles.forEach(id => {
             overwrites.push({ id: id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AttachFiles] });
         });
@@ -155,6 +169,7 @@ client.on('interactionCreate', async interaction => {
             new ButtonBuilder().setCustomId('close_req').setLabel('Zamknij').setEmoji('🔒').setStyle(ButtonStyle.Danger)
         );
 
+        // Ping @everyone przy otwarciu
         await channel.send({ content: `@everyone`, embeds: [welcomeEmbed], components: [row] });
         await interaction.reply({ content: `✅ Twój ticket został otwarty: ${channel}`, ephemeral: true });
     }
@@ -184,9 +199,9 @@ client.on('interactionCreate', async interaction => {
         });
     }
 
-    // 4. MODAL ZAMYKANIA
+    // 4. MODAL ZAMYKANIA (TYLKO DLA STAFF/ADMIN)
     if (interaction.isButton() && interaction.customId === 'close_req') {
-        if (!isStaff) return interaction.reply({ content: "❌ Nie masz uprawnień do zamykania.", ephemeral: true });
+        if (!isStaff) return interaction.reply({ content: "❌ Nie masz uprawnień do zamykania ticketów.", ephemeral: true });
 
         const modal = new ModalBuilder().setCustomId('modal_close').setTitle('Zamykanie Ticketu');
         const input = new TextInputBuilder()
@@ -199,7 +214,7 @@ client.on('interactionCreate', async interaction => {
         await interaction.showModal(modal);
     }
 
-    // 5. USUNIĘCIE KANAŁU
+    // 5. FINALNE USUNIĘCIE KANAŁU
     if (interaction.type === InteractionType.ModalSubmit && interaction.customId === 'modal_close') {
         const reason = interaction.fields.getTextInputValue('reason');
         const ownerName = interaction.channel.name.split('-')[1];
@@ -216,7 +231,9 @@ client.on('interactionCreate', async interaction => {
         if (owner) await owner.send({ embeds: [dm] }).catch(() => {});
         
         await interaction.reply("✅ Zamykanie za 5 sekund...");
-        setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
+        setTimeout(() => {
+            interaction.channel.delete().catch(() => {});
+        }, 5000);
     }
 });
 
